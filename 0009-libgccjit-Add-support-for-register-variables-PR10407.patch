@@ -1,0 +1,382 @@
+From 2d372a741e9ef29eb377f9edfc6c539d1b2722e5 Mon Sep 17 00:00:00 2001
+From: Antoni Boucher <bouanto@zoho.com>
+Date: Sun, 29 Aug 2021 10:54:55 -0400
+Subject: [PATCH] libgccjit: Add support for register variables [PR104072]
+
+2022-01-17  Antoni Boucher <bouanto@zoho.com>
+
+gcc/jit/
+	PR target/104072
+	* docs/topics/compatibility.rst (LIBGCCJIT_ABI_21): New ABI tag.
+	* docs/topics/expressions.rst: Add documentation for the
+	function gcc_jit_lvalue_set_register_name.
+	* dummy-frontend.c: Clear the global_regs cache to avoid an
+	issue where compiling multiple times the same code gives an
+	error about assigning the same register to 2 global variables.
+	* jit-playback.h: New function (set_register_name).
+	* jit-recording.c: New function (set_register_name) and add
+	support for register variables.
+	* jit-recording.h: New field (m_reg_name) and new function
+	(set_register_name).
+	* libgccjit.c: New function (gcc_jit_lvalue_set_register_name).
+	* libgccjit.h: New function (gcc_jit_lvalue_set_register_name).
+	* libgccjit.map (LIBGCCJIT_ABI_21): New ABI tag.
+
+gcc/
+	* reginfo.c: New function (clear_global_regs_cache).
+	* system.h: New function (clear_global_regs_cache).
+
+gcc/testsuite/
+	* jit.dg/all-non-failing-tests.h: Add new
+	test-register-variable.
+	* jit.dg/test-register-variable.c: New test.
+---
+ gcc/jit/docs/topics/compatibility.rst         |  9 ++++
+ gcc/jit/docs/topics/expressions.rst           | 20 +++++++
+ gcc/jit/dummy-frontend.c                      |  2 +
+ gcc/jit/jit-playback.h                        |  9 ++++
+ gcc/jit/jit-recording.c                       | 18 +++++--
+ gcc/jit/jit-recording.h                       |  9 ++--
+ gcc/jit/libgccjit.c                           | 12 +++++
+ gcc/jit/libgccjit.h                           | 12 +++++
+ gcc/jit/libgccjit.map                         |  9 ++++
+ gcc/reginfo.c                                 |  8 +++
+ gcc/system.h                                  |  2 +
+ gcc/testsuite/jit.dg/all-non-failing-tests.h  |  3 ++
+ gcc/testsuite/jit.dg/test-register-variable.c | 54 +++++++++++++++++++
+ 13 files changed, 161 insertions(+), 6 deletions(-)
+ create mode 100644 gcc/testsuite/jit.dg/test-register-variable.c
+
+diff --git a/gcc/jit/docs/topics/compatibility.rst b/gcc/jit/docs/topics/compatibility.rst
+index 16cebe31a10..cd0ae4838a2 100644
+--- a/gcc/jit/docs/topics/compatibility.rst
++++ b/gcc/jit/docs/topics/compatibility.rst
+@@ -302,3 +302,12 @@ thread-local storage model of a variable:
+ section of a variable:
+ 
+   * :func:`gcc_jit_lvalue_set_link_section`
++
++.. _LIBGCCJIT_ABI_21:
++
++``LIBGCCJIT_ABI_21``
++-----------------------
++``LIBGCCJIT_ABI_21`` covers the addition of an API entrypoint to set the
++register name of a variable:
++
++  * :func:`gcc_jit_lvalue_set_register_name`
+diff --git a/gcc/jit/docs/topics/expressions.rst b/gcc/jit/docs/topics/expressions.rst
+index 791a20398ca..afe333a520f 100644
+--- a/gcc/jit/docs/topics/expressions.rst
++++ b/gcc/jit/docs/topics/expressions.rst
+@@ -738,6 +738,26 @@ where the rvalue is computed by reading from the storage area.
+ 
+       #ifdef LIBGCCJIT_HAVE_gcc_jit_lvalue_set_link_section
+ 
++.. function:: void
++              gcc_jit_lvalue_set_register_name (gcc_jit_lvalue *lvalue,
++                                                const char *reg_name);
++
++   Set the register name of a variable.
++   The parameter ``reg_name`` must be non-NULL. Analogous to:
++
++   .. code-block:: c
++
++     register int variable asm ("r12");
++
++   in C.
++
++   This entrypoint was added in :ref:`LIBGCCJIT_ABI_21`; you can test for
++   its presence using
++
++   .. code-block:: c
++
++      #ifdef LIBGCCJIT_HAVE_gcc_jit_lvalue_set_register_name
++
+ Global variables
+ ****************
+ 
+diff --git a/gcc/jit/dummy-frontend.c b/gcc/jit/dummy-frontend.c
+index 84ff359bfe3..04d8fc6ab48 100644
+--- a/gcc/jit/dummy-frontend.c
++++ b/gcc/jit/dummy-frontend.c
+@@ -599,6 +599,8 @@ jit_langhook_init (void)
+ 
+   build_common_builtin_nodes ();
+ 
++  clear_global_regs_cache ();
++
+   /* The default precision for floating point numbers.  This is used
+      for floating point constants with abstract type.  This may
+      eventually be controllable by a command line option.  */
+diff --git a/gcc/jit/jit-playback.h b/gcc/jit/jit-playback.h
+index c93d7055d43..af4427c4503 100644
+--- a/gcc/jit/jit-playback.h
++++ b/gcc/jit/jit-playback.h
+@@ -24,6 +24,7 @@ along with GCC; see the file COPYING3.  If not see
+ #include <utility> // for std::pair
+ 
+ #include "timevar.h"
++#include "varasm.h"
+ 
+ #include "jit-recording.h"
+ 
+@@ -701,6 +702,14 @@ public:
+     set_decl_section_name (as_tree (), name);
+   }
+ 
++  void
++  set_register_name (const char* reg_name)
++  {
++    set_user_assembler_name (as_tree (), reg_name);
++    DECL_REGISTER (as_tree ()) = 1;
++    DECL_HARD_REGISTER (as_tree ()) = 1;
++  }
++
+ private:
+   bool mark_addressable (location *loc);
+ };
+diff --git a/gcc/jit/jit-recording.c b/gcc/jit/jit-recording.c
+index ee8934131d1..393d72298a7 100644
+--- a/gcc/jit/jit-recording.c
++++ b/gcc/jit/jit-recording.c
+@@ -3807,6 +3807,11 @@ void recording::lvalue::set_link_section (const char *name)
+   m_link_section = new_string (name);
+ }
+ 
++void recording::lvalue::set_register_name (const char *reg_name)
++{
++  m_reg_name = new_string (reg_name);
++}
++
+ /* The implementation of class gcc::jit::recording::param.  */
+ 
+ /* Implementation of pure virtual hook recording::memento::replay_into
+@@ -4673,6 +4678,9 @@ recording::global::replay_into (replayer *r)
+   if (m_link_section != NULL)
+     global->set_link_section (m_link_section->c_str ());
+ 
++  if (m_reg_name != NULL)
++    global->set_register_name (m_reg_name->c_str ());
++
+   set_playback_obj (global);
+ }
+ 
+@@ -6343,11 +6351,15 @@ recording::function_pointer::write_reproducer (reproducer &r)
+ void
+ recording::local::replay_into (replayer *r)
+ {
+-  set_playback_obj (
+-    m_func->playback_function ()
++  playback::lvalue *obj = m_func->playback_function ()
+       ->new_local (playback_location (r, m_loc),
+ 		   m_type->playback_type (),
+-		   playback_string (m_name)));
++		   playback_string (m_name));
++
++  if (m_reg_name != NULL)
++    obj->set_register_name (m_reg_name->c_str ());
++
++  set_playback_obj (obj);
+ }
+ 
+ /* Override the default implementation of
+diff --git a/gcc/jit/jit-recording.h b/gcc/jit/jit-recording.h
+index b663d0f21f5..d8575487de4 100644
+--- a/gcc/jit/jit-recording.h
++++ b/gcc/jit/jit-recording.h
+@@ -1147,8 +1147,9 @@ public:
+ 	  location *loc,
+ 	  type *type_)
+     : rvalue (ctxt, loc, type_),
+-    m_tls_model (GCC_JIT_TLS_MODEL_NONE),
+-    m_link_section (NULL)
++    m_link_section (NULL),
++    m_reg_name (NULL),
++    m_tls_model (GCC_JIT_TLS_MODEL_NONE)
+     {}
+ 
+   playback::lvalue *
+@@ -1172,10 +1173,12 @@ public:
+   virtual bool is_global () const { return false; }
+   void set_tls_model (enum gcc_jit_tls_model model);
+   void set_link_section (const char *name);
++  void set_register_name (const char *reg_name);
+ 
+ protected:
+-  enum gcc_jit_tls_model m_tls_model;
+   string *m_link_section;
++  string *m_reg_name;
++  enum gcc_jit_tls_model m_tls_model;
+ };
+ 
+ class param : public lvalue
+diff --git a/gcc/jit/libgccjit.c b/gcc/jit/libgccjit.c
+index 03704ef10b8..1757ad583fe 100644
+--- a/gcc/jit/libgccjit.c
++++ b/gcc/jit/libgccjit.c
+@@ -2649,6 +2649,18 @@ gcc_jit_lvalue_set_link_section (gcc_jit_lvalue *lvalue,
+   lvalue->set_link_section (section_name);
+ }
+ 
++/* Public entrypoint.  See description in libgccjit.h.
++
++   After error-checking, the real work is done by the
++   gcc::jit::recording::lvalue::set_register_name method in jit-recording.c.  */
++
++void
++gcc_jit_lvalue_set_register_name (gcc_jit_lvalue *lvalue,
++				  const char *reg_name)
++{
++  lvalue->set_register_name (reg_name);
++}
++
+ /* Public entrypoint.  See description in libgccjit.h.
+ 
+    After error-checking, the real work is done by the
+diff --git a/gcc/jit/libgccjit.h b/gcc/jit/libgccjit.h
+index 2a5ffacb1fe..fec6d516855 100644
+--- a/gcc/jit/libgccjit.h
++++ b/gcc/jit/libgccjit.h
+@@ -1277,6 +1277,18 @@ extern void
+ gcc_jit_lvalue_set_link_section (gcc_jit_lvalue *lvalue,
+ 			    const char *section_name);
+ 
++#define LIBGCCJIT_HAVE_gcc_jit_lvalue_set_register_name
++
++/* Make this variable a register variable and set its register name.
++
++   This API entrypoint was added in LIBGCCJIT_ABI_21; you can test for its
++   presence using
++     #ifdef LIBGCCJIT_HAVE_gcc_jit_lvalue_set_register_name
++*/
++void
++gcc_jit_lvalue_set_register_name (gcc_jit_lvalue *lvalue,
++				  const char *reg_name);
++
+ extern gcc_jit_lvalue *
+ gcc_jit_function_new_local (gcc_jit_function *func,
+ 			    gcc_jit_location *loc,
+diff --git a/gcc/jit/libgccjit.map b/gcc/jit/libgccjit.map
+index f373fd39ac7..f45abcf5305 100644
+--- a/gcc/jit/libgccjit.map
++++ b/gcc/jit/libgccjit.map
+@@ -243,3 +243,12 @@ LIBGCCJIT_ABI_19 {
+     gcc_jit_context_new_union_constructor;
+     gcc_jit_global_set_initializer_rvalue;
+ } LIBGCCJIT_ABI_18;
++
++LIBGCCJIT_ABI_20 {
++  global:
++} LIBGCCJIT_ABI_19;
++
++LIBGCCJIT_ABI_21 {
++  global:
++    gcc_jit_lvalue_set_register_name;
++} LIBGCCJIT_ABI_20;
+diff --git a/gcc/reginfo.c b/gcc/reginfo.c
+index 234f72eceeb..4fe375c4463 100644
+--- a/gcc/reginfo.c
++++ b/gcc/reginfo.c
+@@ -91,6 +91,14 @@ static const char initial_call_used_regs[] = CALL_USED_REGISTERS;
+    and are also considered fixed.  */
+ char global_regs[FIRST_PSEUDO_REGISTER];
+ 
++void clear_global_regs_cache (void)
++{
++  for (size_t i = 0 ; i < FIRST_PSEUDO_REGISTER ; i++)
++  {
++    global_regs[i] = 0;
++  }
++}
++
+ /* The set of global registers.  */
+ HARD_REG_SET global_reg_set;
+ 
+diff --git a/gcc/system.h b/gcc/system.h
+index c25cd64366f..950969367b3 100644
+--- a/gcc/system.h
++++ b/gcc/system.h
+@@ -1316,4 +1316,6 @@ endswith (const char *str, const char *suffix)
+   return memcmp (str + str_len - suffix_len, suffix, suffix_len) == 0;
+ }
+ 
++extern void clear_global_regs_cache (void);
++
+ #endif /* ! GCC_SYSTEM_H */
+diff --git a/gcc/testsuite/jit.dg/all-non-failing-tests.h b/gcc/testsuite/jit.dg/all-non-failing-tests.h
+index 29afe064db6..0603ace255a 100644
+--- a/gcc/testsuite/jit.dg/all-non-failing-tests.h
++++ b/gcc/testsuite/jit.dg/all-non-failing-tests.h
+@@ -306,6 +306,9 @@
+ #undef create_code
+ #undef verify_code
+ 
++/* test-register-variable.c: This can't be in the testcases array as it
++   doesn't have a verify_code implementation.  */
++
+ /* test-string-literal.c */
+ #define create_code create_code_string_literal
+ #define verify_code verify_code_string_literal
+diff --git a/gcc/testsuite/jit.dg/test-register-variable.c b/gcc/testsuite/jit.dg/test-register-variable.c
+new file mode 100644
+index 00000000000..3cea3f1668f
+--- /dev/null
++++ b/gcc/testsuite/jit.dg/test-register-variable.c
+@@ -0,0 +1,54 @@
++#include <stdlib.h>
++#include <stdio.h>
++
++#include "libgccjit.h"
++
++/* We don't want set_options() in harness.h to set -O3 so our little local
++   is optimized away. */
++#define TEST_ESCHEWS_SET_OPTIONS
++static void set_options (gcc_jit_context *ctxt, const char *argv0)
++{
++}
++
++#define TEST_COMPILING_TO_FILE
++#define OUTPUT_KIND      GCC_JIT_OUTPUT_KIND_ASSEMBLER
++#define OUTPUT_FILENAME  "output-of-test-link-section-assembler.c.s"
++#include "harness.h"
++
++void
++create_code (gcc_jit_context *ctxt, void *user_data)
++{
++  /* Let's try to inject the equivalent of:
++     register int global_variable asm ("r13");
++     int main() {
++        register int variable asm ("r12");
++        return 0;
++     }
++  */
++  gcc_jit_type *int_type =
++    gcc_jit_context_get_type (ctxt, GCC_JIT_TYPE_INT);
++  gcc_jit_lvalue *global_variable =
++    gcc_jit_context_new_global (
++      ctxt, NULL, GCC_JIT_GLOBAL_EXPORTED, int_type, "global_variable");
++  gcc_jit_lvalue_set_register_name(global_variable, "r13");
++
++  gcc_jit_function *func_main =
++    gcc_jit_context_new_function (ctxt, NULL,
++				  GCC_JIT_FUNCTION_EXPORTED,
++				  int_type,
++				  "main",
++				  0, NULL,
++				  0);
++  gcc_jit_lvalue *variable = gcc_jit_function_new_local(func_main, NULL, int_type, "variable");
++  gcc_jit_lvalue_set_register_name(variable, "r12");
++  gcc_jit_rvalue *two = gcc_jit_context_new_rvalue_from_int (ctxt, int_type, 2);
++  gcc_jit_rvalue *one = gcc_jit_context_one (ctxt, int_type);
++  gcc_jit_block *block = gcc_jit_function_new_block (func_main, NULL);
++  gcc_jit_block_add_assignment(block, NULL, variable, one);
++  gcc_jit_block_add_assignment(block, NULL, global_variable, two);
++  gcc_jit_block_end_with_return (block, NULL, gcc_jit_lvalue_as_rvalue(variable));
++}
++
++/* { dg-final { jit-verify-output-file-was-created "" } } */
++/* { dg-final { jit-verify-assembler-output "movl	\\\$1, %r12d" } } */
++/* { dg-final { jit-verify-assembler-output "movl	\\\$2, %r13d" } } */
+-- 
+2.26.2.7.g19db9cfb68.dirty
+
