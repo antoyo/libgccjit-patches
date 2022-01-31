@@ -1,0 +1,380 @@
+From ebdb6905f23ddef28292a1d71081eebb7a2a9bb9 Mon Sep 17 00:00:00 2001
+From: Antoni Boucher <bouanto@zoho.com>
+Date: Tue, 25 Jan 2022 21:12:32 -0500
+Subject: [PATCH] libgccjit: Add support for setting the alignment [PR104293]
+
+2022-01-30  Antoni Boucher <bouanto@zoho.com>
+
+gcc/jit/
+	PR jit/104293
+	* docs/topics/compatibility.rst (LIBGCCJIT_ABI_24): New ABI tag.
+	* docs/topics/expressions.rst: Add documentation for the
+	functions gcc_jit_lvalue_set_alignment and
+	gcc_jit_lvalue_get_alignment.
+	* jit-playback.h: New function (set_alignment).
+	* jit-recording.cc: New function (set_alignment).
+	* jit-recording.h: New functions (set_alignment, get_alignment)
+	and new field (m_alignment).
+	* libgccjit.cc: New functions (gcc_jit_lvalue_get_alignment,
+	gcc_jit_lvalue_set_alignment)
+	* libgccjit.h: New functions (gcc_jit_lvalue_get_alignment,
+	gcc_jit_lvalue_set_alignment)
+	* libgccjit.map (LIBGCCJIT_ABI_24): New ABI tag.
+
+gcc/testsuite/
+	PR jit/104293
+	* jit.dg/all-non-failing-tests.h: Mention
+	test-setting-alignment.
+	* jit.dg/test-setting-alignment.c: New test.
+---
+ gcc/jit/docs/topics/compatibility.rst         | 10 +++
+ gcc/jit/docs/topics/expressions.rst           | 39 +++++++++++
+ gcc/jit/jit-playback.h                        |  7 ++
+ gcc/jit/jit-recording.cc                      | 17 ++++-
+ gcc/jit/jit-recording.h                       |  6 +-
+ gcc/jit/libgccjit.cc                          | 25 ++++++++
+ gcc/jit/libgccjit.h                           | 19 ++++++
+ gcc/jit/libgccjit.map                         | 18 ++++++
+ gcc/testsuite/jit.dg/all-non-failing-tests.h  |  3 +
+ gcc/testsuite/jit.dg/test-setting-alignment.c | 64 +++++++++++++++++++
+ 10 files changed, 205 insertions(+), 3 deletions(-)
+ create mode 100644 gcc/testsuite/jit.dg/test-setting-alignment.c
+
+diff --git a/gcc/jit/docs/topics/compatibility.rst b/gcc/jit/docs/topics/compatibility.rst
+index 16cebe31a10..1957399dceb 100644
+--- a/gcc/jit/docs/topics/compatibility.rst
++++ b/gcc/jit/docs/topics/compatibility.rst
+@@ -302,3 +302,13 @@ thread-local storage model of a variable:
+ section of a variable:
+ 
+   * :func:`gcc_jit_lvalue_set_link_section`
++
++.. _LIBGCCJIT_ABI_24:
++
++``LIBGCCJIT_ABI_24``
++-----------------------
++``LIBGCCJIT_ABI_24`` covers the addition of functions to get and set the
++alignement of a variable:
++
++  * :func:`gcc_jit_lvalue_set_alignment`
++  * :func:`gcc_jit_lvalue_get_alignment`
+diff --git a/gcc/jit/docs/topics/expressions.rst b/gcc/jit/docs/topics/expressions.rst
+index 791a20398ca..0f5f5376d8c 100644
+--- a/gcc/jit/docs/topics/expressions.rst
++++ b/gcc/jit/docs/topics/expressions.rst
+@@ -738,6 +738,45 @@ where the rvalue is computed by reading from the storage area.
+ 
+       #ifdef LIBGCCJIT_HAVE_gcc_jit_lvalue_set_link_section
+ 
++.. function:: void
++              gcc_jit_lvalue_set_alignment (gcc_jit_lvalue *lvalue,
++                                            int alignment)
++
++   Set the alignment of a variable.
++   The parameter ``alignment`` is in bits. Analogous to:
++
++   .. code-block:: c
++
++     int variable __attribute__((aligned (16)));
++
++   in C, but in bits instead of bytes.
++
++   This entrypoint was added in :ref:`LIBGCCJIT_ABI_24`; you can test for
++   its presence using
++
++   .. code-block:: c
++
++      #ifdef LIBGCCJIT_HAVE_ALIGNMENT
++
++.. function:: int
++              gcc_jit_lvalue_get_alignment (gcc_jit_lvalue *lvalue)
++
++   Return the alignment of a variable set by ``gcc_jit_lvalue_set_alignment``, in bits.
++   Return 0 if the alignment was not set. Analogous to:
++
++   .. code-block:: c
++
++     _Alignof (variable)
++
++   in C, but in bits instead of bytes.
++
++   This entrypoint was added in :ref:`LIBGCCJIT_ABI_24`; you can test for
++   its presence using
++
++   .. code-block:: c
++
++      #ifdef LIBGCCJIT_HAVE_ALIGNMENT
++
+ Global variables
+ ****************
+ 
+diff --git a/gcc/jit/jit-playback.h b/gcc/jit/jit-playback.h
+index c93d7055d43..4a3c4a6a09b 100644
+--- a/gcc/jit/jit-playback.h
++++ b/gcc/jit/jit-playback.h
+@@ -701,6 +701,13 @@ public:
+     set_decl_section_name (as_tree (), name);
+   }
+ 
++  void
++  set_alignment (int alignment)
++  {
++      SET_DECL_ALIGN (as_tree (), alignment);
++      DECL_USER_ALIGN (as_tree ()) = 1;
++  }
++
+ private:
+   bool mark_addressable (location *loc);
+ };
+diff --git a/gcc/jit/jit-recording.cc b/gcc/jit/jit-recording.cc
+index 1e3fadfacd7..7176fb34734 100644
+--- a/gcc/jit/jit-recording.cc
++++ b/gcc/jit/jit-recording.cc
+@@ -3807,6 +3807,11 @@ void recording::lvalue::set_link_section (const char *name)
+   m_link_section = new_string (name);
+ }
+ 
++void recording::lvalue::set_alignment (int alignment)
++{
++  m_alignment = alignment;
++}
++
+ /* The implementation of class gcc::jit::recording::param.  */
+ 
+ /* Implementation of pure virtual hook recording::memento::replay_into
+@@ -4673,6 +4678,9 @@ recording::global::replay_into (replayer *r)
+   if (m_link_section != NULL)
+     global->set_link_section (m_link_section->c_str ());
+ 
++  if (m_alignment != 0)
++    global->set_alignment (m_alignment);
++
+   set_playback_obj (global);
+ }
+ 
+@@ -6343,11 +6351,16 @@ recording::function_pointer::write_reproducer (reproducer &r)
+ void
+ recording::local::replay_into (replayer *r)
+ {
+-  set_playback_obj (
++  playback::lvalue *local =
+     m_func->playback_function ()
+       ->new_local (playback_location (r, m_loc),
+ 		   m_type->playback_type (),
+-		   playback_string (m_name)));
++		   playback_string (m_name));
++
++  if (m_alignment != 0)
++    local->set_alignment (m_alignment);
++
++  set_playback_obj (local);
+ }
+ 
+ /* Override the default implementation of
+diff --git a/gcc/jit/jit-recording.h b/gcc/jit/jit-recording.h
+index 846d65cb202..f0e936ccb30 100644
+--- a/gcc/jit/jit-recording.h
++++ b/gcc/jit/jit-recording.h
+@@ -1148,7 +1148,8 @@ public:
+ 	  type *type_)
+     : rvalue (ctxt, loc, type_),
+     m_tls_model (GCC_JIT_TLS_MODEL_NONE),
+-    m_link_section (NULL)
++    m_link_section (NULL),
++    m_alignment (0)
+     {}
+ 
+   playback::lvalue *
+@@ -1172,10 +1173,13 @@ public:
+   virtual bool is_global () const { return false; }
+   void set_tls_model (enum gcc_jit_tls_model model);
+   void set_link_section (const char *name);
++  void set_alignment (int alignment);
++  int get_alignment () { return m_alignment; }
+ 
+ protected:
+   enum gcc_jit_tls_model m_tls_model;
+   string *m_link_section;
++  int m_alignment;
+ };
+ 
+ class param : public lvalue
+diff --git a/gcc/jit/libgccjit.cc b/gcc/jit/libgccjit.cc
+index 4c352e8c93d..e03f15ec9c8 100644
+--- a/gcc/jit/libgccjit.cc
++++ b/gcc/jit/libgccjit.cc
+@@ -2649,6 +2649,31 @@ gcc_jit_lvalue_set_link_section (gcc_jit_lvalue *lvalue,
+   lvalue->set_link_section (section_name);
+ }
+ 
++/* Public entrypoint.  See description in libgccjit.h.
++
++   After error-checking, the real work is done by the
++   gcc::jit::recording::lvalue::get_link_section method in jit-recording.cc.  */
++
++int
++gcc_jit_lvalue_get_alignment (gcc_jit_lvalue *lvalue)
++{
++  RETURN_VAL_IF_FAIL (lvalue, 0, NULL, NULL, "NULL lvalue");
++  return lvalue->get_alignment ();
++}
++
++/* Public entrypoint.  See description in libgccjit.h.
++
++   After error-checking, the real work is done by the
++   gcc::jit::recording::lvalue::set_alignment method in jit-recording.cc.  */
++
++void
++gcc_jit_lvalue_set_alignment (gcc_jit_lvalue *lvalue,
++			      int alignment)
++{
++  RETURN_IF_FAIL (lvalue, NULL, NULL, "NULL lvalue");
++  lvalue->set_alignment (alignment);
++}
++
+ /* Public entrypoint.  See description in libgccjit.h.
+ 
+    After error-checking, the real work is done by the
+diff --git a/gcc/jit/libgccjit.h b/gcc/jit/libgccjit.h
+index 2a5ffacb1fe..74969871c06 100644
+--- a/gcc/jit/libgccjit.h
++++ b/gcc/jit/libgccjit.h
+@@ -1277,6 +1277,25 @@ extern void
+ gcc_jit_lvalue_set_link_section (gcc_jit_lvalue *lvalue,
+ 			    const char *section_name);
+ 
++#define LIBGCCJIT_HAVE_ALIGNMENT
++
++/* Set the alignment of a variable.
++
++   This API entrypoint was added in LIBGCCJIT_ABI_24; you can test for its
++   presence using
++     #ifdef LIBGCCJIT_HAVE_ALIGNMENT  */
++extern void
++gcc_jit_lvalue_set_alignment (gcc_jit_lvalue *lvalue,
++			      int alignment);
++
++/* Get the alignment of a variable.
++
++   This API entrypoint was added in LIBGCCJIT_ABI_24; you can test for its
++   presence using
++     #ifdef LIBGCCJIT_HAVE_ALIGNMENT  */
++extern int
++gcc_jit_lvalue_get_alignment (gcc_jit_lvalue *lvalue);
++
+ extern gcc_jit_lvalue *
+ gcc_jit_function_new_local (gcc_jit_function *func,
+ 			    gcc_jit_location *loc,
+diff --git a/gcc/jit/libgccjit.map b/gcc/jit/libgccjit.map
+index f373fd39ac7..df51e4fdd8c 100644
+--- a/gcc/jit/libgccjit.map
++++ b/gcc/jit/libgccjit.map
+@@ -243,3 +243,21 @@ LIBGCCJIT_ABI_19 {
+     gcc_jit_context_new_union_constructor;
+     gcc_jit_global_set_initializer_rvalue;
+ } LIBGCCJIT_ABI_18;
++
++LIBGCCJIT_ABI_20 {
++} LIBGCCJIT_ABI_19;
++
++LIBGCCJIT_ABI_21 {
++} LIBGCCJIT_ABI_20;
++
++LIBGCCJIT_ABI_22 {
++} LIBGCCJIT_ABI_21;
++
++LIBGCCJIT_ABI_23 {
++} LIBGCCJIT_ABI_22;
++
++LIBGCCJIT_ABI_24 {
++  global:
++    gcc_jit_lvalue_set_alignment;
++    gcc_jit_lvalue_get_alignment;
++} LIBGCCJIT_ABI_23;
+diff --git a/gcc/testsuite/jit.dg/all-non-failing-tests.h b/gcc/testsuite/jit.dg/all-non-failing-tests.h
+index 29afe064db6..72c46e81e51 100644
+--- a/gcc/testsuite/jit.dg/all-non-failing-tests.h
++++ b/gcc/testsuite/jit.dg/all-non-failing-tests.h
+@@ -306,6 +306,9 @@
+ #undef create_code
+ #undef verify_code
+ 
++/* test-setting-alignment.c: This can't be in the testcases array as it
++   doesn't have a verify_code implementation.  */
++
+ /* test-string-literal.c */
+ #define create_code create_code_string_literal
+ #define verify_code verify_code_string_literal
+diff --git a/gcc/testsuite/jit.dg/test-setting-alignment.c b/gcc/testsuite/jit.dg/test-setting-alignment.c
+new file mode 100644
+index 00000000000..e87afbeacd3
+--- /dev/null
++++ b/gcc/testsuite/jit.dg/test-setting-alignment.c
+@@ -0,0 +1,64 @@
++#include <stdlib.h>
++#include <stdio.h>
++
++#include "libgccjit.h"
++
++/* We don't want set_options() in harness.h to set -O3 so our little local
++   is optimized away. */
++#define TEST_ESCHEWS_SET_OPTIONS
++static void set_options (gcc_jit_context *ctxt, const char *argv0)
++{
++}
++
++#define TEST_COMPILING_TO_FILE
++#define OUTPUT_KIND      GCC_JIT_OUTPUT_KIND_ASSEMBLER
++#define OUTPUT_FILENAME  "output-of-test-setting-alignment.c.s"
++#include "harness.h"
++
++void
++create_code (gcc_jit_context *ctxt, void *user_data)
++{
++  /* Let's try to inject the equivalent of:
++     int foo __attribute__((aligned (8)));
++
++     int main (void) {
++        int bar __attribute__((aligned (16)));
++     }
++  */
++  gcc_jit_type *int_type =
++    gcc_jit_context_get_type (ctxt, GCC_JIT_TYPE_INT);
++  gcc_jit_lvalue *foo =
++    gcc_jit_context_new_global (
++      ctxt, NULL, GCC_JIT_GLOBAL_EXPORTED, int_type, "foo");
++  gcc_jit_lvalue_set_alignment(foo, 64);
++
++  gcc_jit_field *field = gcc_jit_context_new_field (ctxt,
++    NULL,
++    int_type,
++    "a");
++  gcc_jit_struct *struct_type =
++    gcc_jit_context_new_struct_type(ctxt, NULL, "Type", 1, &field);
++  gcc_jit_function *func_main =
++    gcc_jit_context_new_function (ctxt, NULL,
++				  GCC_JIT_FUNCTION_EXPORTED,
++				  int_type,
++				  "main",
++				  0, NULL,
++				  0);
++  /*gcc_jit_rvalue *zero = gcc_jit_context_zero (ctxt, int_type);*/
++  gcc_jit_lvalue *bar =
++    gcc_jit_function_new_local (
++      func_main, NULL,
++      gcc_jit_struct_as_type (struct_type),
++      "bar");
++  gcc_jit_lvalue_set_alignment(bar, 128);
++  gcc_jit_block *block = gcc_jit_function_new_block (func_main, NULL);
++  /*gcc_jit_block_add_assignment (block, NULL, bar, zero);*/
++  gcc_jit_rvalue *return_value =
++      gcc_jit_lvalue_as_rvalue (gcc_jit_lvalue_access_field (bar, NULL, field));
++  gcc_jit_block_end_with_return (block, NULL, return_value);
++}
++
++/* { dg-final { jit-verify-output-file-was-created "" } } */
++/* { dg-final { jit-verify-assembler-output ".comm	foo,4,8" } } */
++/* { dg-final { jit-verify-assembler-output "movl	-16\\\(%rbp), %eax" } } */
+-- 
+2.26.2.7.g19db9cfb68.dirty
+
