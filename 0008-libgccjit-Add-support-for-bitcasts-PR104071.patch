@@ -1,62 +1,70 @@
-From 35e113b51c416af0c13bc7eb160ff6c0cbcff813 Mon Sep 17 00:00:00 2001
+From d7f49170394de78471164a9fb8d08ad92508b42a Mon Sep 17 00:00:00 2001
 From: Antoni Boucher <bouanto@zoho.com>
 Date: Wed, 9 Jun 2021 18:29:14 -0400
 Subject: [PATCH] libgccjit: Add support for bitcasts [PR104071]
 
-2022-01-17  Antoni Boucher <bouanto@zoho.com>
+2022-01-21  Antoni Boucher <bouanto@zoho.com>
 
 gcc/jit/
-	PR target/104071
-	* docs/topics/compatibility.rst (LIBGCCJIT_ABI_20): New ABI tag.
+	PR jit/104071
+	* docs/topics/compatibility.rst (LIBGCCJIT_ABI_21): New ABI tag.
 	* docs/topics/expressions.rst: Add documentation for the
 	function gcc_jit_context_new_bitcast.
-	* dummy-frontend.c: clear the cache of non-standard integer
-	types to avoid having issues with some optimizations of
-	bitcast where the SSA_NAME will have a size of a cached
-	integer type that should have been invalidated, causing a
-	comparison of integer constant to fail.
-	* jit-playback.c: New function (new_bitcast).
+	* jit-playback.cc: New function (new_bitcast).
 	* jit-playback.h: New function (new_bitcast).
-	* jit-recording.c: New functions (new_bitcast,
+	* jit-recording.cc: New functions (new_bitcast,
 	bitcast::replay_into, bitcast::visit_children,
 	bitcast::make_debug_string, bitcast::write_reproducer).
 	* jit-recording.h: New calss (bitcast) and new function
 	(new_bitcast, bitcast::replay_into, bitcast::visit_children,
 	bitcast::make_debug_string, bitcast::write_reproducer,
 	bitcast::get_precedence).
-	* libgccjit.c: New function (gcc_jit_context_new_bitcast)
+	* libgccjit.cc: New function (gcc_jit_context_new_bitcast)
 	* libgccjit.h: New function (gcc_jit_context_new_bitcast)
-	* libgccjit.map (LIBGCCJIT_ABI_20): New ABI tag.
+	* libgccjit.map (LIBGCCJIT_ABI_21): New ABI tag.
 
 gcc/testsuite/
-	PR target/104071
+	PR jit/104071
 	* jit.dg/all-non-failing-tests.h: Add new test-bitcast.
 	* jit.dg/test-bitcast.c: New test.
+	* jit.dg/test-error-bad-bitcast.c: New test.
+	* jit.dg/test-error-bad-bitcast2.c: New test.
 
 gcc/
-	PR target/104071
-	* tree.c: New function (clear_nonstandard_integer_type_cache).
-	* tree.h: New function (clear_nonstandard_integer_type_cache).
+	PR jit/104071
+	* toplev.cc: Call the new function tree_cc_finalize in
+	toplev::finalize.
+	* tree.cc: New functions (clear_nonstandard_integer_type_cache
+	and tree_cc_finalize) to clear the cache of non-standard integer
+	types to avoid having issues with some optimizations of
+	bitcast where the SSA_NAME will have a size of a cached
+	integer type that should have been invalidated, causing a
+	comparison of integer constant to fail.
+	* tree.h: New function (tree_cc_finalize).
 ---
- gcc/jit/docs/topics/compatibility.rst        |  9 +++
- gcc/jit/docs/topics/expressions.rst          | 10 +++
- gcc/jit/dummy-frontend.c                     |  2 +
- gcc/jit/jit-playback.c                       | 13 ++++
- gcc/jit/jit-playback.h                       |  5 ++
- gcc/jit/jit-recording.c                      | 66 ++++++++++++++++++++
- gcc/jit/jit-recording.h                      | 32 ++++++++++
- gcc/jit/libgccjit.c                          | 28 +++++++++
- gcc/jit/libgccjit.h                          |  9 +++
- gcc/jit/libgccjit.map                        |  6 ++
- gcc/testsuite/jit.dg/all-non-failing-tests.h | 10 +++
- gcc/testsuite/jit.dg/test-bitcast.c          | 60 ++++++++++++++++++
- gcc/tree.c                                   |  8 +++
- gcc/tree.h                                   |  1 +
- 14 files changed, 259 insertions(+)
+ gcc/jit/docs/topics/compatibility.rst         |  9 +++
+ gcc/jit/docs/topics/expressions.rst           | 19 ++++++
+ gcc/jit/jit-playback.cc                       | 27 ++++++++
+ gcc/jit/jit-playback.h                        |  5 ++
+ gcc/jit/jit-recording.cc                      | 66 +++++++++++++++++++
+ gcc/jit/jit-recording.h                       | 32 +++++++++
+ gcc/jit/libgccjit.cc                          | 28 ++++++++
+ gcc/jit/libgccjit.h                           | 15 +++++
+ gcc/jit/libgccjit.map                         |  9 +++
+ gcc/testsuite/jit.dg/all-non-failing-tests.h  | 10 +++
+ gcc/testsuite/jit.dg/test-bitcast.c           | 60 +++++++++++++++++
+ gcc/testsuite/jit.dg/test-error-bad-bitcast.c | 62 +++++++++++++++++
+ .../jit.dg/test-error-bad-bitcast2.c          | 62 +++++++++++++++++
+ gcc/toplev.cc                                 |  1 +
+ gcc/tree.cc                                   | 15 +++++
+ gcc/tree.h                                    |  1 +
+ 16 files changed, 421 insertions(+)
  create mode 100644 gcc/testsuite/jit.dg/test-bitcast.c
+ create mode 100644 gcc/testsuite/jit.dg/test-error-bad-bitcast.c
+ create mode 100644 gcc/testsuite/jit.dg/test-error-bad-bitcast2.c
 
 diff --git a/gcc/jit/docs/topics/compatibility.rst b/gcc/jit/docs/topics/compatibility.rst
-index 16cebe31a10..b5a6b704dda 100644
+index 16cebe31a10..610d9dc175f 100644
 --- a/gcc/jit/docs/topics/compatibility.rst
 +++ b/gcc/jit/docs/topics/compatibility.rst
 @@ -302,3 +302,12 @@ thread-local storage model of a variable:
@@ -64,19 +72,19 @@ index 16cebe31a10..b5a6b704dda 100644
  
    * :func:`gcc_jit_lvalue_set_link_section`
 +
-+.. _LIBGCCJIT_ABI_20:
++.. _LIBGCCJIT_ABI_21:
 +
-+``LIBGCCJIT_ABI_20``
++``LIBGCCJIT_ABI_21``
 +-----------------------
-+``LIBGCCJIT_ABI_20`` covers the addition of an API entrypoint to bitcast a
++``LIBGCCJIT_ABI_21`` covers the addition of an API entrypoint to bitcast a
 +value from one type to another:
 +
 +  * :func:`gcc_jit_context_new_bitcast`
 diff --git a/gcc/jit/docs/topics/expressions.rst b/gcc/jit/docs/topics/expressions.rst
-index 791a20398ca..6e0b5db777b 100644
+index 791a20398ca..e0b6f426aee 100644
 --- a/gcc/jit/docs/topics/expressions.rst
 +++ b/gcc/jit/docs/topics/expressions.rst
-@@ -649,6 +649,16 @@ Type-coercion
+@@ -649,6 +649,25 @@ Type-coercion
       * int <-> bool
       * P*  <-> Q*, for pointer types P and Q
  
@@ -86,31 +94,27 @@ index 791a20398ca..6e0b5db777b 100644
 +                                           gcc_jit_rvalue *rvalue,\
 +                                           gcc_jit_type *type)
 +
-+   Given an rvalue of T, bitcast it to another type.
++   Given an rvalue of T, bitcast it to another type, meaning that this will
++   generate a new rvalue by interpreting the bits of ``rvalue`` to the layout
++   of ``type``.
 +
 +   The type of rvalue must be the same size as the size of ``type``.
++
++   This entrypoint was added in :ref:`LIBGCCJIT_ABI_21`; you can test for
++   its presence using
++
++   .. code-block:: c
++
++      #ifdef LIBGCCJIT_HAVE_gcc_jit_context_new_bitcast
 +
  Lvalues
  -------
  
-diff --git a/gcc/jit/dummy-frontend.c b/gcc/jit/dummy-frontend.c
-index 84ff359bfe3..c3da97642e3 100644
---- a/gcc/jit/dummy-frontend.c
-+++ b/gcc/jit/dummy-frontend.c
-@@ -592,6 +592,8 @@ jit_langhook_init (void)
-   global_dc->begin_diagnostic = jit_begin_diagnostic;
-   global_dc->end_diagnostic = jit_end_diagnostic;
- 
-+  clear_nonstandard_integer_type_cache ();
-+
-   build_common_tree_nodes (false);
- 
-   /* I don't know why this has to be done explicitly.  */
-diff --git a/gcc/jit/jit-playback.c b/gcc/jit/jit-playback.c
-index 1d64caf4e20..4ad2f6ce41d 100644
---- a/gcc/jit/jit-playback.c
-+++ b/gcc/jit/jit-playback.c
-@@ -1390,6 +1390,19 @@ new_cast (playback::location *loc,
+diff --git a/gcc/jit/jit-playback.cc b/gcc/jit/jit-playback.cc
+index d1835c79863..d2efae1c163 100644
+--- a/gcc/jit/jit-playback.cc
++++ b/gcc/jit/jit-playback.cc
+@@ -1390,6 +1390,33 @@ new_cast (playback::location *loc,
    return new rvalue (this, t_cast);
  }
  
@@ -120,8 +124,22 @@ index 1d64caf4e20..4ad2f6ce41d 100644
 +		       rvalue *expr,
 +		       type *type_)
 +{
-+  tree t_bitcast = build1 (VIEW_CONVERT_EXPR,
-+			       type_->as_tree (), expr->as_tree ());
++  tree expr_size = TYPE_SIZE (expr->get_type ()->as_tree ());
++  tree type_size = TYPE_SIZE (type_->as_tree ());
++  tree t_expr = expr->as_tree ();
++  tree t_dst_type = type_->as_tree ();
++  if (expr_size != type_size)
++  {
++    active_playback_ctxt->add_error (loc,
++      "bitcast with types of different sizes");
++    fprintf (stderr, "input expression (size: %ld):\n",
++      tree_to_uhwi (expr_size));
++    debug_tree (t_expr);
++    fprintf (stderr, "requested type (size: %ld):\n",
++      tree_to_uhwi (type_size));
++    debug_tree (t_dst_type);
++  }
++  tree t_bitcast = build1 (VIEW_CONVERT_EXPR, t_dst_type, t_expr);
 +  if (loc)
 +    set_tree_location (t_bitcast, loc);
 +  return new rvalue (this, t_bitcast);
@@ -146,10 +164,10 @@ index c93d7055d43..5b107be9d69 100644
    lvalue *
    new_array_access (location *loc,
  		    rvalue *ptr,
-diff --git a/gcc/jit/jit-recording.c b/gcc/jit/jit-recording.c
-index ee8934131d1..ae3381b586d 100644
---- a/gcc/jit/jit-recording.c
-+++ b/gcc/jit/jit-recording.c
+diff --git a/gcc/jit/jit-recording.cc b/gcc/jit/jit-recording.cc
+index 1e3fadfacd7..e1029086da8 100644
+--- a/gcc/jit/jit-recording.cc
++++ b/gcc/jit/jit-recording.cc
 @@ -1242,6 +1242,22 @@ recording::context::new_cast (recording::location *loc,
    return result;
  }
@@ -231,7 +249,7 @@ index ee8934131d1..ae3381b586d 100644
  
  /* The constructor for gcc::jit::recording::base_call.  */
 diff --git a/gcc/jit/jit-recording.h b/gcc/jit/jit-recording.h
-index b663d0f21f5..713aac36ebe 100644
+index 846d65cb202..ed03b3a24c8 100644
 --- a/gcc/jit/jit-recording.h
 +++ b/gcc/jit/jit-recording.h
 @@ -205,6 +205,11 @@ public:
@@ -280,10 +298,10 @@ index b663d0f21f5..713aac36ebe 100644
  class base_call : public rvalue
  {
   public:
-diff --git a/gcc/jit/libgccjit.c b/gcc/jit/libgccjit.c
-index 03704ef10b8..cd8516d1c4d 100644
---- a/gcc/jit/libgccjit.c
-+++ b/gcc/jit/libgccjit.c
+diff --git a/gcc/jit/libgccjit.cc b/gcc/jit/libgccjit.cc
+index 4c352e8c93d..6bf1e1ceee0 100644
+--- a/gcc/jit/libgccjit.cc
++++ b/gcc/jit/libgccjit.cc
 @@ -2405,6 +2405,34 @@ gcc_jit_context_new_cast (gcc_jit_context *ctxt,
    return static_cast <gcc_jit_rvalue *> (ctxt->new_cast (loc, rvalue, type));
  }
@@ -320,16 +338,22 @@ index 03704ef10b8..cd8516d1c4d 100644
  
     After error-checking, the real work is done by the
 diff --git a/gcc/jit/libgccjit.h b/gcc/jit/libgccjit.h
-index 2a5ffacb1fe..de4f9daaebc 100644
+index 2a5ffacb1fe..960e4f4261e 100644
 --- a/gcc/jit/libgccjit.h
 +++ b/gcc/jit/libgccjit.h
-@@ -1206,6 +1206,15 @@ gcc_jit_context_new_cast (gcc_jit_context *ctxt,
+@@ -1206,6 +1206,21 @@ gcc_jit_context_new_cast (gcc_jit_context *ctxt,
  			  gcc_jit_rvalue *rvalue,
  			  gcc_jit_type *type);
  
 +/* Reinterpret a value as another type.
 +
-+   The types must be of the same size.  */
++#define LIBGCCJIT_HAVE_gcc_jit_context_new_bitcast
++
++   The types must be of the same size.
++
++   This API entrypoint was added in LIBGCCJIT_ABI_21; you can test for its
++   presence using
++     #ifdef LIBGCCJIT_HAVE_gcc_jit_context_new_bitcast  */
 +extern gcc_jit_rvalue *
 +gcc_jit_context_new_bitcast (gcc_jit_context *ctxt,
 +			     gcc_jit_location *loc,
@@ -340,10 +364,10 @@ index 2a5ffacb1fe..de4f9daaebc 100644
  gcc_jit_context_new_array_access (gcc_jit_context *ctxt,
  				  gcc_jit_location *loc,
 diff --git a/gcc/jit/libgccjit.map b/gcc/jit/libgccjit.map
-index f373fd39ac7..7b6f415ac82 100644
+index f373fd39ac7..38c355437bf 100644
 --- a/gcc/jit/libgccjit.map
 +++ b/gcc/jit/libgccjit.map
-@@ -238,8 +238,14 @@ LIBGCCJIT_ABI_18 {
+@@ -238,8 +238,17 @@ LIBGCCJIT_ABI_18 {
  } LIBGCCJIT_ABI_17;
  
  LIBGCCJIT_ABI_19 {
@@ -355,9 +379,12 @@ index f373fd39ac7..7b6f415ac82 100644
  } LIBGCCJIT_ABI_18;
 +
 +LIBGCCJIT_ABI_20 {
++} LIBGCCJIT_ABI_19;
++
++LIBGCCJIT_ABI_21 {
 +  global:
 +    gcc_jit_context_new_bitcast;
-+} LIBGCCJIT_ABI_19;
++} LIBGCCJIT_ABI_20;
 diff --git a/gcc/testsuite/jit.dg/all-non-failing-tests.h b/gcc/testsuite/jit.dg/all-non-failing-tests.h
 index 29afe064db6..656351edce1 100644
 --- a/gcc/testsuite/jit.dg/all-non-failing-tests.h
@@ -388,7 +415,7 @@ index 29afe064db6..656351edce1 100644
     verify_code_calling_external_function},
 diff --git a/gcc/testsuite/jit.dg/test-bitcast.c b/gcc/testsuite/jit.dg/test-bitcast.c
 new file mode 100644
-index 00000000000..2d70622051a
+index 00000000000..a092fa117e6
 --- /dev/null
 +++ b/gcc/testsuite/jit.dg/test-bitcast.c
 @@ -0,0 +1,60 @@
@@ -411,15 +438,15 @@ index 00000000000..2d70622051a
 +}
 +   */
 +  gcc_jit_type *int_type =
-+    gcc_jit_context_get_type (ctxt, GCC_JIT_TYPE_INT);
-+  gcc_jit_type *double_type =
++    gcc_jit_context_get_int_type (ctxt, 4, 1);
++  gcc_jit_type *float_type =
 +    gcc_jit_context_get_type (ctxt, GCC_JIT_TYPE_FLOAT);
 +
 +  gcc_jit_param *x =
 +    gcc_jit_context_new_param (
 +      ctxt,
 +      NULL,
-+      double_type, "x");
++      float_type, "x");
 +  gcc_jit_param *params[1] = {x};
 +  gcc_jit_function *func =
 +    gcc_jit_context_new_function (ctxt,
@@ -452,15 +479,164 @@ index 00000000000..2d70622051a
 +  note ("my_bitcast returned: %d", val);
 +  CHECK_VALUE (val, 35569201);
 +}
-diff --git a/gcc/tree.c b/gcc/tree.c
-index d98b77db50b..e4bf4e84675 100644
---- a/gcc/tree.c
-+++ b/gcc/tree.c
-@@ -6963,6 +6963,14 @@ build_reference_type (tree to_type)
+diff --git a/gcc/testsuite/jit.dg/test-error-bad-bitcast.c b/gcc/testsuite/jit.dg/test-error-bad-bitcast.c
+new file mode 100644
+index 00000000000..642890605ad
+--- /dev/null
++++ b/gcc/testsuite/jit.dg/test-error-bad-bitcast.c
+@@ -0,0 +1,62 @@
++#include <stdlib.h>
++#include <stdio.h>
++
++#include "libgccjit.h"
++
++#include "harness.h"
++
++void
++create_code (gcc_jit_context *ctxt, void *user_data)
++{
++  /* Let's try to inject the equivalent of:
++
++     int
++     test_fn ()
++     {
++       char f[4096];
++       return bitcast(f, int);
++     }
++
++     and verify that the API complains about the bad cast.
++  */
++  gcc_jit_type *int_type =
++    gcc_jit_context_get_type (ctxt, GCC_JIT_TYPE_INT);
++  gcc_jit_type *char_type =
++    gcc_jit_context_get_type (ctxt, GCC_JIT_TYPE_CHAR);
++
++
++  gcc_jit_type *array_type =
++    gcc_jit_context_new_array_type (ctxt, NULL, char_type, 4096);
++
++  gcc_jit_function *test_fn =
++    gcc_jit_context_new_function (ctxt, NULL,
++                                  GCC_JIT_FUNCTION_EXPORTED,
++                                  int_type,
++                                  "test_fn",
++                                  0, NULL,
++                                  0);
++  gcc_jit_lvalue *f =
++    gcc_jit_function_new_local (
++      test_fn,
++      NULL,
++      array_type, "f");
++
++  gcc_jit_block *block = gcc_jit_function_new_block (test_fn, NULL);
++
++  gcc_jit_block_end_with_return (
++    block, NULL,
++    gcc_jit_context_new_bitcast (ctxt, NULL,
++			      gcc_jit_lvalue_as_rvalue (f),
++			      int_type));
++}
++
++void
++verify_code (gcc_jit_context *ctxt, gcc_jit_result *result)
++{
++  CHECK_VALUE (result, NULL);
++
++  /* Verify that the correct error message was emitted.  */
++  CHECK_STRING_VALUE (gcc_jit_context_get_first_error (ctxt),
++		      "bitcast with types of different sizes");
++}
++
+diff --git a/gcc/testsuite/jit.dg/test-error-bad-bitcast2.c b/gcc/testsuite/jit.dg/test-error-bad-bitcast2.c
+new file mode 100644
+index 00000000000..602ae407076
+--- /dev/null
++++ b/gcc/testsuite/jit.dg/test-error-bad-bitcast2.c
+@@ -0,0 +1,62 @@
++#include <stdlib.h>
++#include <stdio.h>
++
++#include "libgccjit.h"
++
++#include "harness.h"
++
++void
++create_code (gcc_jit_context *ctxt, void *user_data)
++{
++  /* Let's try to inject the equivalent of:
++
++     char[4096]
++     test_fn ()
++     {
++       int f;
++       return bitcast(f, char[4096]);
++     }
++
++     and verify that the API complains about the bad cast.
++  */
++  gcc_jit_type *int_type =
++    gcc_jit_context_get_type (ctxt, GCC_JIT_TYPE_INT);
++  gcc_jit_type *char_type =
++    gcc_jit_context_get_type (ctxt, GCC_JIT_TYPE_CHAR);
++
++
++  gcc_jit_type *array_type =
++    gcc_jit_context_new_array_type (ctxt, NULL, char_type, 4096);
++
++  gcc_jit_function *test_fn =
++    gcc_jit_context_new_function (ctxt, NULL,
++                                  GCC_JIT_FUNCTION_EXPORTED,
++                                  array_type,
++                                  "test_fn",
++                                  0, NULL,
++                                  0);
++  gcc_jit_lvalue *f =
++    gcc_jit_function_new_local (
++      test_fn,
++      NULL,
++      int_type, "f");
++
++  gcc_jit_block *block = gcc_jit_function_new_block (test_fn, NULL);
++
++  gcc_jit_block_end_with_return (
++    block, NULL,
++    gcc_jit_context_new_bitcast (ctxt, NULL,
++			      gcc_jit_lvalue_as_rvalue (f),
++			      array_type));
++}
++
++void
++verify_code (gcc_jit_context *ctxt, gcc_jit_result *result)
++{
++  CHECK_VALUE (result, NULL);
++
++  /* Verify that the correct error message was emitted.  */
++  CHECK_STRING_VALUE (gcc_jit_context_get_first_error (ctxt),
++		      "bitcast with types of different sizes");
++}
++
+diff --git a/gcc/toplev.cc b/gcc/toplev.cc
+index 534da1462e8..bc4921974eb 100644
+--- a/gcc/toplev.cc
++++ b/gcc/toplev.cc
+@@ -2368,6 +2368,7 @@ toplev::finalize (void)
+   gcse_c_finalize ();
+   ipa_cp_c_finalize ();
+   ira_costs_c_finalize ();
++  tree_cc_finalize ();
+ 
+   /* save_decoded_options uses opts_obstack, so these must
+      be cleaned up together.  */
+diff --git a/gcc/tree.cc b/gcc/tree.cc
+index ae159ee20ce..fe9d9083026 100644
+--- a/gcc/tree.cc
++++ b/gcc/tree.cc
+@@ -6963,6 +6963,15 @@ build_reference_type (tree to_type)
    (HOST_BITS_PER_WIDE_INT > 64 ? HOST_BITS_PER_WIDE_INT : 64)
  static GTY(()) tree nonstandard_integer_type_cache[2 * MAX_INT_CACHED_PREC + 2];
  
-+void clear_nonstandard_integer_type_cache (void)
++static void
++clear_nonstandard_integer_type_cache (void)
 +{
 +  for (size_t i = 0 ; i < 2 * MAX_INT_CACHED_PREC + 2 ; i++)
 +  {
@@ -471,15 +647,28 @@ index d98b77db50b..e4bf4e84675 100644
  /* Builds a signed or unsigned integer type of precision PRECISION.
     Used for C bitfields whose precision does not match that of
     built-in target types.  */
+@@ -14565,6 +14574,12 @@ get_attr_nonstring_decl (tree expr, tree *ref)
+   return NULL_TREE;
+ }
+ 
++void
++tree_cc_finalize (void)
++{
++  clear_nonstandard_integer_type_cache ();
++}
++
+ #if CHECKING_P
+ 
+ namespace selftest {
 diff --git a/gcc/tree.h b/gcc/tree.h
-index 318019c4dc5..640b492802c 100644
+index 30bc53c2996..bf886fc2472 100644
 --- a/gcc/tree.h
 +++ b/gcc/tree.h
 @@ -5385,6 +5385,7 @@ extern bool real_minus_onep (const_tree);
  extern void init_ttree (void);
  extern void build_common_tree_nodes (bool);
  extern void build_common_builtin_nodes (void);
-+extern void clear_nonstandard_integer_type_cache (void);
++extern void tree_cc_finalize (void);
  extern tree build_nonstandard_integer_type (unsigned HOST_WIDE_INT, int);
  extern tree build_nonstandard_boolean_type (unsigned HOST_WIDE_INT);
  extern tree build_range_type (tree, tree, tree);

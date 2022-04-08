@@ -1,43 +1,102 @@
-From 002c6803ac7069bf18eabd6729e31de8e2be6128 Mon Sep 17 00:00:00 2001
+From 1f1b7d2298956268e2678a157a34c8f9ac370f3a Mon Sep 17 00:00:00 2001
 From: Antoni Boucher <bouanto@zoho.com>
-Date: Sun, 9 Jan 2022 13:46:35 -0500
-Subject: [PATCH] libgccjit: Add option to hide stderr logs [PR104073]
+Date: Sun, 23 Jan 2022 11:37:07 -0500
+Subject: [PATCH] libgccjit: Add function to hide stderr logs [PR104073]
 
-2022-01-17  Antoni Boucher <bouanto@zoho.com
+2022-01-23  Antoni Boucher <bouanto@zoho.com
 
 gcc/jit/
-	PR target/104073
-	* docs/topics/contexts.rst: Add documentation for the new option
-	GCC_JIT_BOOL_OPTION_HIDE_LOG_STDERR.
-	* jit-recording.c: handle the option
-	GCC_JIT_BOOL_OPTION_HIDE_LOG_STDERR.
-	* libgccjit.h: New option GCC_JIT_BOOL_OPTION_HIDE_LOG_STDERR.
+	PR jit/104073
+	* docs/topics/compatibility.rst (LIBGCCJIT_ABI_23): New ABI tag.
+	* docs/topics/contexts.rst: Add documentation for the new
+	function gcc_jit_context_set_bool_print_errors_to_stderr.
+	* jit-common.h: New enum value
+	(INNER_BOOL_OPTION_PRINT_ERRORS_TO_STDERR).
+	* jit-recording.cc: Handle the new option
+	INNER_BOOL_OPTION_PRINT_ERRORS_TO_STDERR.
+	* libgccjit.cc: New function
+	(gcc_jit_context_set_bool_print_errors_to_stderr).
+	* libgccjit.h: New function
+	(gcc_jit_context_set_bool_print_errors_to_stderr).
+	* libgccjit.map (LIBGCCJIT_ABI_23): New ABI tag.
 ---
- gcc/jit/docs/topics/contexts.rst |  4 ++++
- gcc/jit/jit-recording.c          | 25 ++++++++++++++++---------
- gcc/jit/libgccjit.h              |  3 +++
- 3 files changed, 23 insertions(+), 9 deletions(-)
+ gcc/jit/docs/topics/compatibility.rst |  9 +++++++++
+ gcc/jit/docs/topics/contexts.rst      | 15 +++++++++++++++
+ gcc/jit/jit-common.h                  |  1 +
+ gcc/jit/jit-recording.cc              | 27 +++++++++++++++++----------
+ gcc/jit/libgccjit.cc                  | 17 +++++++++++++++++
+ gcc/jit/libgccjit.h                   | 18 ++++++++++++++++++
+ gcc/jit/libgccjit.map                 | 14 ++++++++++++++
+ 7 files changed, 91 insertions(+), 10 deletions(-)
 
+diff --git a/gcc/jit/docs/topics/compatibility.rst b/gcc/jit/docs/topics/compatibility.rst
+index 16cebe31a10..d4b0ccd98ff 100644
+--- a/gcc/jit/docs/topics/compatibility.rst
++++ b/gcc/jit/docs/topics/compatibility.rst
+@@ -302,3 +302,12 @@ thread-local storage model of a variable:
+ section of a variable:
+ 
+   * :func:`gcc_jit_lvalue_set_link_section`
++
++.. _LIBGCCJIT_ABI_23:
++
++``LIBGCCJIT_ABI_23``
++-----------------------
++``LIBGCCJIT_ABI_23`` covers the addition of an API entrypoint to hide stderr
++logs:
++
++  * :func:`gcc_jit_context_set_bool_print_errors_to_stderr`
 diff --git a/gcc/jit/docs/topics/contexts.rst b/gcc/jit/docs/topics/contexts.rst
-index 68ab7ab1321..193f5096de9 100644
+index 68ab7ab1321..00b45262fda 100644
 --- a/gcc/jit/docs/topics/contexts.rst
 +++ b/gcc/jit/docs/topics/contexts.rst
-@@ -453,6 +453,10 @@ Boolean options
-      If true, the :type:`gcc_jit_context` will not clean up intermediate files
-      written to the filesystem, and will display their location on stderr.
+@@ -489,6 +489,21 @@ Boolean options
  
-+  .. macro:: GCC_JIT_BOOL_OPTION_HIDE_LOG_STDERR
+       #ifdef LIBGCCJIT_HAVE_gcc_jit_context_set_bool_use_external_driver
+ 
++.. function:: void \
++              gcc_jit_context_set_bool_print_errors_to_stderr (gcc_jit_context *ctxt, \
++                                                                 int enabled)
 +
-+     If true, libgccjit will not log the errors on stderr.
++   By default, libgccjit will print errors to stderr.
 +
- .. function:: void \
-               gcc_jit_context_set_bool_allow_unreachable_blocks (gcc_jit_context *ctxt, \
-                                                                  int bool_value)
-diff --git a/gcc/jit/jit-recording.c b/gcc/jit/jit-recording.c
-index ee8934131d1..a6928005e9b 100644
---- a/gcc/jit/jit-recording.c
-+++ b/gcc/jit/jit-recording.c
-@@ -1551,15 +1551,21 @@ recording::context::add_error_va (location *loc, const char *fmt, va_list ap)
++   This entrypoint can be used to disable the printing.
++
++   This entrypoint was added in :ref:`LIBGCCJIT_ABI_23`; you can test for
++   its presence using
++
++   .. code-block:: c
++
++      #ifdef LIBGCCJIT_HAVE_gcc_jit_context_set_bool_print_errors_to_stderr
++
+ Integer options
+ ***************
+ 
+diff --git a/gcc/jit/jit-common.h b/gcc/jit/jit-common.h
+index 1a8cd8bac7b..c3a0b6765c0 100644
+--- a/gcc/jit/jit-common.h
++++ b/gcc/jit/jit-common.h
+@@ -198,6 +198,7 @@ enum inner_bool_option
+ {
+   INNER_BOOL_OPTION_ALLOW_UNREACHABLE_BLOCKS,
+   INNER_BOOL_OPTION_USE_EXTERNAL_DRIVER,
++  INNER_BOOL_OPTION_PRINT_ERRORS_TO_STDERR,
+ 
+   NUM_INNER_BOOL_OPTIONS
+ };
+diff --git a/gcc/jit/jit-recording.cc b/gcc/jit/jit-recording.cc
+index 1e3fadfacd7..36d962ea391 100644
+--- a/gcc/jit/jit-recording.cc
++++ b/gcc/jit/jit-recording.cc
+@@ -592,6 +592,7 @@ recording::context::context (context *parent_ctxt)
+       memset (m_int_options, 0, sizeof (m_int_options));
+       memset (m_bool_options, 0, sizeof (m_bool_options));
+       memset (m_inner_bool_options, 0, sizeof (m_inner_bool_options));
++      m_inner_bool_options[INNER_BOOL_OPTION_PRINT_ERRORS_TO_STDERR] = true;
+     }
+ 
+   memset (m_basic_types, 0, sizeof (m_basic_types));
+@@ -1551,15 +1552,20 @@ recording::context::add_error_va (location *loc, const char *fmt, va_list ap)
    if (!ctxt_progname)
      ctxt_progname = "libgccjit.so";
  
@@ -50,10 +109,9 @@ index ee8934131d1..a6928005e9b 100644
 -    fprintf (stderr, "%s: error: %s\n",
 -	     ctxt_progname,
 -	     errmsg);
-+  bool hide_log_stderr =
-+    get_bool_option (GCC_JIT_BOOL_OPTION_HIDE_LOG_STDERR);
-+
-+  if (!hide_log_stderr)
++  bool print_errors_to_stderr =
++      get_inner_bool_option (INNER_BOOL_OPTION_PRINT_ERRORS_TO_STDERR);
++  if (print_errors_to_stderr)
 +  {
 +    if (loc)
 +      fprintf (stderr, "%s: %s: error: %s\n",
@@ -68,28 +126,95 @@ index ee8934131d1..a6928005e9b 100644
  
    if (!m_error_count)
      {
-@@ -1682,6 +1688,7 @@ static const char * const
-   "GCC_JIT_BOOL_OPTION_DUMP_EVERYTHING",
-   "GCC_JIT_BOOL_OPTION_SELFCHECK_GC",
-   "GCC_JIT_BOOL_OPTION_KEEP_INTERMEDIATES"
-+  "GCC_JIT_BOOL_OPTION_HIDE_LOG_STDERR"
+@@ -1687,7 +1693,8 @@ static const char * const
+ static const char * const
+  inner_bool_option_reproducer_strings[NUM_INNER_BOOL_OPTIONS] = {
+   "gcc_jit_context_set_bool_allow_unreachable_blocks",
+-  "gcc_jit_context_set_bool_use_external_driver"
++  "gcc_jit_context_set_bool_use_external_driver",
++  "gcc_jit_context_set_bool_print_errors_to_stderr",
  };
  
- static const char * const
+ /* Write the current value of all options to the log file (if any).  */
+diff --git a/gcc/jit/libgccjit.cc b/gcc/jit/libgccjit.cc
+index 4c352e8c93d..778f8e926a2 100644
+--- a/gcc/jit/libgccjit.cc
++++ b/gcc/jit/libgccjit.cc
+@@ -3431,6 +3431,23 @@ gcc_jit_context_set_bool_allow_unreachable_blocks (gcc_jit_context *ctxt,
+     bool_value);
+ }
+ 
++/* Public entrypoint.  See description in libgccjit.h.
++
++   After error-checking, the real work is done by the
++   gcc::jit::recording::context::set_inner_bool_option method in
++   jit-recording.cc.  */
++
++void
++gcc_jit_context_set_bool_print_errors_to_stderr (gcc_jit_context *ctxt,
++						 int enabled)
++{
++  RETURN_IF_FAIL (ctxt, NULL, NULL, "NULL context");
++  JIT_LOG_FUNC (ctxt->get_logger ());
++  ctxt->set_inner_bool_option (
++    gcc::jit::INNER_BOOL_OPTION_PRINT_ERRORS_TO_STDERR,
++    enabled);
++}
++
+ /* Public entrypoint.  See description in libgccjit.h.
+ 
+    After error-checking, the real work is done by the
 diff --git a/gcc/jit/libgccjit.h b/gcc/jit/libgccjit.h
-index 2a5ffacb1fe..272b862c164 100644
+index 2a5ffacb1fe..16b8637dd0a 100644
 --- a/gcc/jit/libgccjit.h
 +++ b/gcc/jit/libgccjit.h
-@@ -241,6 +241,9 @@ enum gcc_jit_bool_option
-      their location on stderr.  */
-   GCC_JIT_BOOL_OPTION_KEEP_INTERMEDIATES,
+@@ -293,6 +293,24 @@ gcc_jit_context_set_bool_allow_unreachable_blocks (gcc_jit_context *ctxt,
+    tested for with #ifdef.  */
+ #define LIBGCCJIT_HAVE_gcc_jit_context_set_bool_allow_unreachable_blocks
  
-+  /* If true, gcc_jit_context_release will not print the errors to stderr.  */
-+  GCC_JIT_BOOL_OPTION_HIDE_LOG_STDERR,
++/* By default, libgccjit will print errors to stderr.
 +
-   GCC_JIT_NUM_BOOL_OPTIONS
- };
- 
++   This option can be used to disable the printing.
++
++   This entrypoint was added in LIBGCCJIT_ABI_23; you can test for
++   its presence using
++     #ifdef LIBGCCJIT_HAVE_gcc_jit_context_set_bool_print_errors_to_stderr
++*/
++
++extern void
++gcc_jit_context_set_bool_print_errors_to_stderr (gcc_jit_context *ctxt,
++						 int enabled);
++
++/* Pre-canned feature macro to indicate the presence of
++   gcc_jit_context_set_bool_allow_unreachable_blocks.  This can be
++   tested for with #ifdef.  */
++#define LIBGCCJIT_HAVE_gcc_jit_context_set_bool_print_errors_to_stderr
++
+ /* Implementation detail:
+    libgccjit internally generates assembler, and uses "driver" code
+    for converting it to other formats (e.g. shared libraries).
+diff --git a/gcc/jit/libgccjit.map b/gcc/jit/libgccjit.map
+index f373fd39ac7..aa161b438c8 100644
+--- a/gcc/jit/libgccjit.map
++++ b/gcc/jit/libgccjit.map
+@@ -243,3 +243,17 @@ LIBGCCJIT_ABI_19 {
+     gcc_jit_context_new_union_constructor;
+     gcc_jit_global_set_initializer_rvalue;
+ } LIBGCCJIT_ABI_18;
++
++LIBGCCJIT_ABI_20 {
++} LIBGCCJIT_ABI_19;
++
++LIBGCCJIT_ABI_21 {
++} LIBGCCJIT_ABI_20;
++
++LIBGCCJIT_ABI_22 {
++} LIBGCCJIT_ABI_21;
++
++LIBGCCJIT_ABI_23 {
++  global:
++    gcc_jit_context_set_bool_print_errors_to_stderr;
++} LIBGCCJIT_ABI_22;
 -- 
 2.26.2.7.g19db9cfb68.dirty
 

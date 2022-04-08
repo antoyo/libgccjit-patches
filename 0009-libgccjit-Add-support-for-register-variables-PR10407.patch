@@ -1,4 +1,4 @@
-From 2d372a741e9ef29eb377f9edfc6c539d1b2722e5 Mon Sep 17 00:00:00 2001
+From 542b7af61292a04d61480388d425a1057ecd66d4 Mon Sep 17 00:00:00 2001
 From: Antoni Boucher <bouanto@zoho.com>
 Date: Sun, 29 Aug 2021 10:54:55 -0400
 Subject: [PATCH] libgccjit: Add support for register variables [PR104072]
@@ -6,49 +6,57 @@ Subject: [PATCH] libgccjit: Add support for register variables [PR104072]
 2022-01-17  Antoni Boucher <bouanto@zoho.com>
 
 gcc/jit/
-	PR target/104072
-	* docs/topics/compatibility.rst (LIBGCCJIT_ABI_21): New ABI tag.
+	PR jit/104072
+	* docs/topics/compatibility.rst (LIBGCCJIT_ABI_22): New ABI tag.
 	* docs/topics/expressions.rst: Add documentation for the
 	function gcc_jit_lvalue_set_register_name.
-	* dummy-frontend.c: Clear the global_regs cache to avoid an
+	* dummy-frontend.cc: Clear the global_regs cache to avoid an
 	issue where compiling multiple times the same code gives an
 	error about assigning the same register to 2 global variables.
 	* jit-playback.h: New function (set_register_name).
-	* jit-recording.c: New function (set_register_name) and add
+	* jit-recording.cc: New function (set_register_name) and add
 	support for register variables.
 	* jit-recording.h: New field (m_reg_name) and new function
 	(set_register_name).
-	* libgccjit.c: New function (gcc_jit_lvalue_set_register_name).
+	* libgccjit.cc: New function (gcc_jit_lvalue_set_register_name).
 	* libgccjit.h: New function (gcc_jit_lvalue_set_register_name).
-	* libgccjit.map (LIBGCCJIT_ABI_21): New ABI tag.
+	* libgccjit.map (LIBGCCJIT_ABI_22): New ABI tag.
 
 gcc/
-	* reginfo.c: New function (clear_global_regs_cache).
-	* system.h: New function (clear_global_regs_cache).
+	PR jit/104072
+	* reginfo.cc: New functions (clear_global_regs_cache, reginfo_cc_finalize).
+	* rtl.h: New function (reginfo_cc_finalize).
 
 gcc/testsuite/
+	PR jit/104072
 	* jit.dg/all-non-failing-tests.h: Add new
 	test-register-variable.
+	* jit.dg/test-error-register-variable-bad-name.c: New test.
+	* jit.dg/test-error-register-variable-size-mismatch.c: New test.
 	* jit.dg/test-register-variable.c: New test.
 ---
- gcc/jit/docs/topics/compatibility.rst         |  9 ++++
+ gcc/jit/docs/topics/compatibility.rst         |  9 +++
  gcc/jit/docs/topics/expressions.rst           | 20 +++++++
- gcc/jit/dummy-frontend.c                      |  2 +
- gcc/jit/jit-playback.h                        |  9 ++++
- gcc/jit/jit-recording.c                       | 18 +++++--
- gcc/jit/jit-recording.h                       |  9 ++--
- gcc/jit/libgccjit.c                           | 12 +++++
- gcc/jit/libgccjit.h                           | 12 +++++
- gcc/jit/libgccjit.map                         |  9 ++++
- gcc/reginfo.c                                 |  8 +++
- gcc/system.h                                  |  2 +
- gcc/testsuite/jit.dg/all-non-failing-tests.h  |  3 ++
- gcc/testsuite/jit.dg/test-register-variable.c | 54 +++++++++++++++++++
- 13 files changed, 161 insertions(+), 6 deletions(-)
+ gcc/jit/jit-playback.h                        |  9 +++
+ gcc/jit/jit-recording.cc                      | 18 +++++-
+ gcc/jit/jit-recording.h                       |  9 ++-
+ gcc/jit/libgccjit.cc                          | 14 +++++
+ gcc/jit/libgccjit.h                           | 12 ++++
+ gcc/jit/libgccjit.map                         | 11 ++++
+ gcc/reginfo.cc                                | 18 ++++++
+ gcc/rtl.h                                     |  1 +
+ gcc/testsuite/jit.dg/all-non-failing-tests.h  |  3 +
+ .../test-error-register-variable-bad-name.c   | 35 ++++++++++++
+ ...st-error-register-variable-size-mismatch.c | 40 +++++++++++++
+ gcc/testsuite/jit.dg/test-register-variable.c | 56 +++++++++++++++++++
+ gcc/toplev.cc                                 |  1 +
+ 15 files changed, 250 insertions(+), 6 deletions(-)
+ create mode 100644 gcc/testsuite/jit.dg/test-error-register-variable-bad-name.c
+ create mode 100644 gcc/testsuite/jit.dg/test-error-register-variable-size-mismatch.c
  create mode 100644 gcc/testsuite/jit.dg/test-register-variable.c
 
 diff --git a/gcc/jit/docs/topics/compatibility.rst b/gcc/jit/docs/topics/compatibility.rst
-index 16cebe31a10..cd0ae4838a2 100644
+index 16cebe31a10..689c94c4fac 100644
 --- a/gcc/jit/docs/topics/compatibility.rst
 +++ b/gcc/jit/docs/topics/compatibility.rst
 @@ -302,3 +302,12 @@ thread-local storage model of a variable:
@@ -56,16 +64,16 @@ index 16cebe31a10..cd0ae4838a2 100644
  
    * :func:`gcc_jit_lvalue_set_link_section`
 +
-+.. _LIBGCCJIT_ABI_21:
++.. _LIBGCCJIT_ABI_22:
 +
-+``LIBGCCJIT_ABI_21``
++``LIBGCCJIT_ABI_22``
 +-----------------------
-+``LIBGCCJIT_ABI_21`` covers the addition of an API entrypoint to set the
++``LIBGCCJIT_ABI_22`` covers the addition of an API entrypoint to set the
 +register name of a variable:
 +
 +  * :func:`gcc_jit_lvalue_set_register_name`
 diff --git a/gcc/jit/docs/topics/expressions.rst b/gcc/jit/docs/topics/expressions.rst
-index 791a20398ca..afe333a520f 100644
+index 791a20398ca..5cf780e6349 100644
 --- a/gcc/jit/docs/topics/expressions.rst
 +++ b/gcc/jit/docs/topics/expressions.rst
 @@ -738,6 +738,26 @@ where the rvalue is computed by reading from the storage area.
@@ -85,7 +93,7 @@ index 791a20398ca..afe333a520f 100644
 +
 +   in C.
 +
-+   This entrypoint was added in :ref:`LIBGCCJIT_ABI_21`; you can test for
++   This entrypoint was added in :ref:`LIBGCCJIT_ABI_22`; you can test for
 +   its presence using
 +
 +   .. code-block:: c
@@ -95,19 +103,6 @@ index 791a20398ca..afe333a520f 100644
  Global variables
  ****************
  
-diff --git a/gcc/jit/dummy-frontend.c b/gcc/jit/dummy-frontend.c
-index 84ff359bfe3..04d8fc6ab48 100644
---- a/gcc/jit/dummy-frontend.c
-+++ b/gcc/jit/dummy-frontend.c
-@@ -599,6 +599,8 @@ jit_langhook_init (void)
- 
-   build_common_builtin_nodes ();
- 
-+  clear_global_regs_cache ();
-+
-   /* The default precision for floating point numbers.  This is used
-      for floating point constants with abstract type.  This may
-      eventually be controllable by a command line option.  */
 diff --git a/gcc/jit/jit-playback.h b/gcc/jit/jit-playback.h
 index c93d7055d43..af4427c4503 100644
 --- a/gcc/jit/jit-playback.h
@@ -135,10 +130,10 @@ index c93d7055d43..af4427c4503 100644
  private:
    bool mark_addressable (location *loc);
  };
-diff --git a/gcc/jit/jit-recording.c b/gcc/jit/jit-recording.c
-index ee8934131d1..393d72298a7 100644
---- a/gcc/jit/jit-recording.c
-+++ b/gcc/jit/jit-recording.c
+diff --git a/gcc/jit/jit-recording.cc b/gcc/jit/jit-recording.cc
+index 1e3fadfacd7..5703114f138 100644
+--- a/gcc/jit/jit-recording.cc
++++ b/gcc/jit/jit-recording.cc
 @@ -3807,6 +3807,11 @@ void recording::lvalue::set_link_section (const char *name)
    m_link_section = new_string (name);
  }
@@ -181,7 +176,7 @@ index ee8934131d1..393d72298a7 100644
  
  /* Override the default implementation of
 diff --git a/gcc/jit/jit-recording.h b/gcc/jit/jit-recording.h
-index b663d0f21f5..d8575487de4 100644
+index 846d65cb202..60b363d590e 100644
 --- a/gcc/jit/jit-recording.h
 +++ b/gcc/jit/jit-recording.h
 @@ -1147,8 +1147,9 @@ public:
@@ -210,23 +205,25 @@ index b663d0f21f5..d8575487de4 100644
  };
  
  class param : public lvalue
-diff --git a/gcc/jit/libgccjit.c b/gcc/jit/libgccjit.c
-index 03704ef10b8..1757ad583fe 100644
---- a/gcc/jit/libgccjit.c
-+++ b/gcc/jit/libgccjit.c
-@@ -2649,6 +2649,18 @@ gcc_jit_lvalue_set_link_section (gcc_jit_lvalue *lvalue,
+diff --git a/gcc/jit/libgccjit.cc b/gcc/jit/libgccjit.cc
+index 4c352e8c93d..c2adaa384b6 100644
+--- a/gcc/jit/libgccjit.cc
++++ b/gcc/jit/libgccjit.cc
+@@ -2649,6 +2649,20 @@ gcc_jit_lvalue_set_link_section (gcc_jit_lvalue *lvalue,
    lvalue->set_link_section (section_name);
  }
  
 +/* Public entrypoint.  See description in libgccjit.h.
 +
 +   After error-checking, the real work is done by the
-+   gcc::jit::recording::lvalue::set_register_name method in jit-recording.c.  */
++   gcc::jit::recording::lvalue::set_register_name method in jit-recording.cc.  */
 +
 +void
 +gcc_jit_lvalue_set_register_name (gcc_jit_lvalue *lvalue,
 +				  const char *reg_name)
 +{
++  RETURN_IF_FAIL (lvalue, NULL, NULL, "NULL lvalue");
++  RETURN_IF_FAIL (reg_name, NULL, NULL, "NULL reg_name");
 +  lvalue->set_register_name (reg_name);
 +}
 +
@@ -234,7 +231,7 @@ index 03704ef10b8..1757ad583fe 100644
  
     After error-checking, the real work is done by the
 diff --git a/gcc/jit/libgccjit.h b/gcc/jit/libgccjit.h
-index 2a5ffacb1fe..fec6d516855 100644
+index 2a5ffacb1fe..c8a9ec4f6a4 100644
 --- a/gcc/jit/libgccjit.h
 +++ b/gcc/jit/libgccjit.h
 @@ -1277,6 +1277,18 @@ extern void
@@ -245,7 +242,7 @@ index 2a5ffacb1fe..fec6d516855 100644
 +
 +/* Make this variable a register variable and set its register name.
 +
-+   This API entrypoint was added in LIBGCCJIT_ABI_21; you can test for its
++   This API entrypoint was added in LIBGCCJIT_ABI_22; you can test for its
 +   presence using
 +     #ifdef LIBGCCJIT_HAVE_gcc_jit_lvalue_set_register_name
 +*/
@@ -257,52 +254,65 @@ index 2a5ffacb1fe..fec6d516855 100644
  gcc_jit_function_new_local (gcc_jit_function *func,
  			    gcc_jit_location *loc,
 diff --git a/gcc/jit/libgccjit.map b/gcc/jit/libgccjit.map
-index f373fd39ac7..f45abcf5305 100644
+index f373fd39ac7..8b7dc13c97d 100644
 --- a/gcc/jit/libgccjit.map
 +++ b/gcc/jit/libgccjit.map
-@@ -243,3 +243,12 @@ LIBGCCJIT_ABI_19 {
+@@ -243,3 +243,14 @@ LIBGCCJIT_ABI_19 {
      gcc_jit_context_new_union_constructor;
      gcc_jit_global_set_initializer_rvalue;
  } LIBGCCJIT_ABI_18;
 +
 +LIBGCCJIT_ABI_20 {
-+  global:
 +} LIBGCCJIT_ABI_19;
 +
 +LIBGCCJIT_ABI_21 {
++} LIBGCCJIT_ABI_20;
++
++LIBGCCJIT_ABI_22 {
 +  global:
 +    gcc_jit_lvalue_set_register_name;
-+} LIBGCCJIT_ABI_20;
-diff --git a/gcc/reginfo.c b/gcc/reginfo.c
-index 234f72eceeb..4fe375c4463 100644
---- a/gcc/reginfo.c
-+++ b/gcc/reginfo.c
-@@ -91,6 +91,14 @@ static const char initial_call_used_regs[] = CALL_USED_REGISTERS;
-    and are also considered fixed.  */
- char global_regs[FIRST_PSEUDO_REGISTER];
++} LIBGCCJIT_ABI_21;
+diff --git a/gcc/reginfo.cc b/gcc/reginfo.cc
+index 234f72eceeb..07ee9596e80 100644
+--- a/gcc/reginfo.cc
++++ b/gcc/reginfo.cc
+@@ -122,6 +122,24 @@ const char * reg_class_names[] = REG_CLASS_NAMES;
+    reginfo has been initialized.  */
+ static int no_global_reg_vars = 0;
  
-+void clear_global_regs_cache (void)
++static void
++clear_global_regs_cache (void)
 +{
 +  for (size_t i = 0 ; i < FIRST_PSEUDO_REGISTER ; i++)
 +  {
 +    global_regs[i] = 0;
++    global_regs_decl[i] = NULL;
 +  }
 +}
 +
- /* The set of global registers.  */
- HARD_REG_SET global_reg_set;
- 
-diff --git a/gcc/system.h b/gcc/system.h
-index c25cd64366f..950969367b3 100644
---- a/gcc/system.h
-+++ b/gcc/system.h
-@@ -1316,4 +1316,6 @@ endswith (const char *str, const char *suffix)
-   return memcmp (str + str_len - suffix_len, suffix, suffix_len) == 0;
- }
- 
-+extern void clear_global_regs_cache (void);
++void
++reginfo_cc_finalize (void)
++{
++  clear_global_regs_cache ();
++  no_global_reg_vars = 0;
++  CLEAR_HARD_REG_SET (global_reg_set);
++}
 +
- #endif /* ! GCC_SYSTEM_H */
+ /* Given a register bitmap, turn on the bits in a HARD_REG_SET that
+    correspond to the hard registers, if any, set in that map.  This
+    could be done far more efficiently by having all sorts of special-cases
+diff --git a/gcc/rtl.h b/gcc/rtl.h
+index 648f9b8a601..13163d94ec9 100644
+--- a/gcc/rtl.h
++++ b/gcc/rtl.h
+@@ -3774,6 +3774,7 @@ extern bool resize_reg_info (void);
+ extern void free_reg_info (void);
+ extern void init_subregs_of_mode (void);
+ extern void finish_subregs_of_mode (void);
++extern void reginfo_cc_finalize (void);
+ 
+ /* recog.cc */
+ extern rtx extract_asm_operands (rtx);
 diff --git a/gcc/testsuite/jit.dg/all-non-failing-tests.h b/gcc/testsuite/jit.dg/all-non-failing-tests.h
 index 29afe064db6..0603ace255a 100644
 --- a/gcc/testsuite/jit.dg/all-non-failing-tests.h
@@ -317,12 +327,101 @@ index 29afe064db6..0603ace255a 100644
  /* test-string-literal.c */
  #define create_code create_code_string_literal
  #define verify_code verify_code_string_literal
+diff --git a/gcc/testsuite/jit.dg/test-error-register-variable-bad-name.c b/gcc/testsuite/jit.dg/test-error-register-variable-bad-name.c
+new file mode 100644
+index 00000000000..3f2699374af
+--- /dev/null
++++ b/gcc/testsuite/jit.dg/test-error-register-variable-bad-name.c
+@@ -0,0 +1,35 @@
++/*
++
++  Test that the proper error is triggered when we build a register variable
++  with a register name that doesn't exist.
++
++*/
++
++#include <stdlib.h>
++#include <stdio.h>
++
++#include "libgccjit.h"
++#include "harness.h"
++
++void
++create_code (gcc_jit_context *ctxt, void *user_data)
++{
++  gcc_jit_type *int_type =
++    gcc_jit_context_get_type (ctxt, GCC_JIT_TYPE_INT);
++  gcc_jit_lvalue *global_variable =
++    gcc_jit_context_new_global (
++      ctxt, NULL, GCC_JIT_GLOBAL_EXPORTED, int_type, "global_variable");
++  gcc_jit_lvalue_set_register_name(global_variable, "this_is_not_a_register");
++}
++
++void
++verify_code (gcc_jit_context *ctxt, gcc_jit_result *result)
++{
++  /* Ensure that the bad API usage prevents the API giving a bogus
++     result back.  */
++  CHECK_VALUE (result, NULL);
++
++  /* Verify that the correct error message was emitted. */
++  CHECK_STRING_VALUE (gcc_jit_context_get_last_error (ctxt),
++		      "invalid register name for '\033[01m\033[Kglobal_variable\33[m\33[K'");
++}
+diff --git a/gcc/testsuite/jit.dg/test-error-register-variable-size-mismatch.c b/gcc/testsuite/jit.dg/test-error-register-variable-size-mismatch.c
+new file mode 100644
+index 00000000000..d9a0ac505d1
+--- /dev/null
++++ b/gcc/testsuite/jit.dg/test-error-register-variable-size-mismatch.c
+@@ -0,0 +1,40 @@
++/*
++
++  Test that the proper error is triggered when we build a register variable
++  with a register name that doesn't exist.
++
++*/
++
++#include <stdlib.h>
++#include <stdio.h>
++
++#include "libgccjit.h"
++#include "harness.h"
++
++void
++create_code (gcc_jit_context *ctxt, void *user_data)
++{
++  gcc_jit_type *int_type =
++    gcc_jit_context_get_type (ctxt, GCC_JIT_TYPE_INT);
++  gcc_jit_type *array_type =
++    gcc_jit_context_new_array_type (ctxt, NULL, int_type, 4096);
++  gcc_jit_lvalue *global_variable =
++    gcc_jit_context_new_global (
++      ctxt, NULL, GCC_JIT_GLOBAL_EXPORTED, array_type, "global_variable");
++  gcc_jit_lvalue_set_register_name(global_variable, "r12");
++}
++
++void
++verify_code (gcc_jit_context *ctxt, gcc_jit_result *result)
++{
++  /* Ensure that the bad API usage prevents the API giving a bogus
++     result back.  */
++  CHECK_VALUE (result, NULL);
++
++  /* Verify that the correct error message was emitted. */
++  // FIXME: this doesn't compare equal because it seems global_variable is formatted in bold.
++  // Maybe trigger the error myself with
++  // decode_reg_name (asmspec)?
++  CHECK_STRING_VALUE (gcc_jit_context_get_last_error (ctxt),
++		      "data type of '\033[01m\033[Kglobal_variable\33[m\33[K' isn't suitable for a register");
++}
 diff --git a/gcc/testsuite/jit.dg/test-register-variable.c b/gcc/testsuite/jit.dg/test-register-variable.c
 new file mode 100644
-index 00000000000..3cea3f1668f
+index 00000000000..ce6dcaa9213
 --- /dev/null
 +++ b/gcc/testsuite/jit.dg/test-register-variable.c
-@@ -0,0 +1,54 @@
+@@ -0,0 +1,56 @@
++/* { dg-do compile { target x86_64-*-* } } */
++
 +#include <stdlib.h>
 +#include <stdio.h>
 +
@@ -377,6 +476,18 @@ index 00000000000..3cea3f1668f
 +/* { dg-final { jit-verify-output-file-was-created "" } } */
 +/* { dg-final { jit-verify-assembler-output "movl	\\\$1, %r12d" } } */
 +/* { dg-final { jit-verify-assembler-output "movl	\\\$2, %r13d" } } */
+diff --git a/gcc/toplev.cc b/gcc/toplev.cc
+index 534da1462e8..edba96b002d 100644
+--- a/gcc/toplev.cc
++++ b/gcc/toplev.cc
+@@ -2368,6 +2368,7 @@ toplev::finalize (void)
+   gcse_c_finalize ();
+   ipa_cp_c_finalize ();
+   ira_costs_c_finalize ();
++  reginfo_cc_finalize ();
+ 
+   /* save_decoded_options uses opts_obstack, so these must
+      be cleaned up together.  */
 -- 
 2.26.2.7.g19db9cfb68.dirty
 
