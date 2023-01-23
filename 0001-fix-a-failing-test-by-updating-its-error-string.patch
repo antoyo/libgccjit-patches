@@ -1,0 +1,26 @@
+From e6db0cb107e54789095f4585dd279a2c984d2ca1 Mon Sep 17 00:00:00 2001
+From: Guillaume Gomez <guillaume1.gomez@gmail.com>
+Date: Wed, 14 Dec 2022 14:28:22 +0100
+Subject: [PATCH] Fix a failing test by updating its error string.
+
+gcc/testsuite/ChangeLog:
+
+	* jit.dg/test-error-array-bounds.c: Update test.
+---
+ gcc/testsuite/jit.dg/test-error-array-bounds.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/gcc/testsuite/jit.dg/test-error-array-bounds.c b/gcc/testsuite/jit.dg/test-error-array-bounds.c
+index b6c0ee526d4..a0dead13cb7 100644
+--- a/gcc/testsuite/jit.dg/test-error-array-bounds.c
++++ b/gcc/testsuite/jit.dg/test-error-array-bounds.c
+@@ -70,5 +70,5 @@ verify_code (gcc_jit_context *ctxt, gcc_jit_result *result)
+   /* ...and that the message was captured by the API.  */
+   CHECK_STRING_VALUE (gcc_jit_context_get_first_error (ctxt),
+ 		      "array subscript 10 is above array bounds of"
+-		      " 'char[10]' [-Warray-bounds]");
++		      " 'char[10]' [-Warray-bounds=]");
+ }
+-- 
+2.34.1
+
